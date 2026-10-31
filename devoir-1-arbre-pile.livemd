@@ -1,0 +1,136 @@
+# Devoir 1 · Ajouter le signe moins
+
+## Notre question
+
+Comment distinguer la soustraction `8.0 - 3.0` du signe de `-3.0` ? Nous ajoutons un nœud `{:neg, tree}` qui prend l'opposé d'un seul sous-arbre. Vous allez le construire, le lire dans des tokens, puis le calculer. Les trois exercices ont leurs propres vérifications.
+
+> **Repères.** Durée visée : 30 à 45 min, trois petits exercices.
+> Les prolongements sont facultatifs et hors barème. Si vous dépassez,
+> arrêtez-vous à la fin d'un exercice et indiquez le temps passé.
+> Relisez le chapitre 2 du poly, hors Bonus. Les briques sont
+> fournies ici : aucun carnet de séance terminé n'est nécessaire.
+> 
+> **À rendre.** Enregistrez ce carnet sous `AP2/devoir-1-arbre-pile.livemd`
+> dans votre dépôt `ap-homework`, puis commitez et poussez-le pour
+> CYCLE1, le **dimanche 15 novembre 2026 à 23 h 59**.
+> Les carnets de séance ne se rendent pas. Travail individuel, ou en binôme
+> seulement si je l'annonce : copie commune dans les deux dépôts et
+> `BINOME.md`, où chacun explique sa contribution et un essai compris.
+
+```elixir
+import ExUnit.Assertions
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## 1 · Un enfant ou deux ?
+
+Une soustraction a deux enfants ; le signe moins n'en a qu'un. Sans calculer, construisez les arbres de `-3.0` et de `-(1.0 + 2.0)`. `Negative.wrap/1` reçoit un arbre et rend son opposé, sans lire de texte ni calculer sa valeur.
+
+Dessinez d'abord les deux arbres sans regarder les assertions. Quelle opération est leur racine, et quel sous-arbre est l'unique enfant de `:neg` ?
+
+```elixir
+defmodule Negative do
+  def wrap(tree), do: {:neg, tree}
+end
+
+assert Negative.wrap({:number, 3.0}) == {:neg, {:number, 3.0}}
+assert Negative.wrap({:binary, :plus, {:number, 1.0}, {:number, 2.0}}) ==
+         {:neg, {:binary, :plus, {:number, 1.0}, {:number, 2.0}}}
+```
+
+Pour -3, la racine est :neg et l'unique enfant est : {:number, 3.0}
+Pour -(1.0 + 2.0), la racine est :neg et l'unique enfant est : {:binary, :plus, {:number, 1.0}, {:number, 2.0}}
+
+<!-- livebook:{"break_markdown":true} -->
+
+![La soustraction a deux enfants ; le signe moins n'en a qu'un](https://ap-2026.noce.fr/diagrams/devoir1/signe-moins.svg)
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## 2 · Lire un nombre signé
+
+Nous isolons une petite extension du lecteur : `Signed.read/1` lit un nombre, précédé éventuellement d'un seul token `:minus`, et rend `{arbre, reste}`. Ce n'est pas encore un parser complet : les parenthèses et deux signes successifs sont hors contrat. La clause sans signe est fournie ; écrivez l'autre sur son modèle.
+
+```elixir
+defmodule Signed do
+  def read([{:number, value} | rest]), do: {{:number, value}, rest}
+  def read([:minus, {:number, value} | rest]), do: {{:neg, {:number, value}}, rest}
+end
+
+assert Signed.read([{:number, 3.0}]) == {{:number, 3.0}, []}
+assert Signed.read([:minus, {:number, 3.0}, :plus, {:number, 2.0}]) ==
+         {{:neg, {:number, 3.0}}, [:plus, {:number, 2.0}]}
+```
+
+Pourquoi le token `:plus` reste-t-il dans le résultat ? Quel lecteur devrait le prendre ensuite ?
+
+<!-- livebook:{"break_markdown":true} -->
+
+Il reste dans le résultat parce que Signed.read ne lit qu'un nombre, il ne lit pas les opérations.
+C'est le lecteur d'opération qui devrait le prendre ensuite.
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## 3 · Calculer l'opposé d'un sous-arbre
+
+Le petit interpréteur ci-dessous est fourni, sauf le nouveau nœud. Calculez d'abord son enfant ; si vous obtenez `{:ok, value}`, appelez `ArithmeticOps.negate(value)`. Si l'enfant rend une erreur, rendez la même erreur. Les motifs de `case` sont ceux d'AP2.
+
+```elixir
+defmodule ArithmeticOps do
+  def apply(:plus, left, right), do: {:ok, left + right}
+  def apply(:minus, left, right), do: {:ok, left - right}
+  def apply(:multiply, left, right), do: {:ok, left * right}
+  def apply(:divide, _left, right) when right == 0.0, do: {:error, :division_by_zero}
+  def apply(:divide, left, right), do: {:ok, left / right}
+  def negate(value), do: {:ok, -value}
+end
+```
+
+```elixir
+defmodule Interpreter do
+  def eval({:number, value}), do: {:ok, value}
+  def eval({:binary, op, left, right}) do
+    case eval(left) do
+      {:ok, left_value} ->
+        case eval(right) do
+          {:ok, right_value} -> ArithmeticOps.apply(op, left_value, right_value)
+          error -> error
+        end
+      error -> error
+    end
+  end
+  def eval({:neg, tree}) do
+    case eval(tree) do
+      {:ok, value} -> ArithmeticOps.negate(value)
+      error -> error
+    end
+  end
+end
+
+assert Interpreter.eval({:neg, {:number, 3.0}}) == {:ok, -3.0}
+assert Interpreter.eval({:neg, {:binary, :plus, {:number, 1.0}, {:number, 2.0}}}) == {:ok, -3.0}
+assert Interpreter.eval({:neg, {:binary, :divide, {:number, 1.0}, {:number, 0.0}}}) ==
+         {:error, :division_by_zero}
+
+assert Interpreter.eval({:neg, {:number, 0.0}}) == {:ok, 0.0}
+assert Interpreter.eval({:neg, {:neg, {:number, 3.0}}}) == {:ok, 3.0}
+```
+
+Ajoutez un **cas limite** personnel, par ex. zéro ou deux nœuds `:neg` imbriqués, et expliquez ce que votre vérification cherche.
+
+## Pour aller plus loin · facultatif
+
+Étendez `Signed.read/1` à plusieurs signes successifs : après un `:minus`, rappelez le lecteur, puis enveloppez l'arbre obtenu. Testez deux puis trois signes. Pourquoi le cas du nombre suffit-il à arrêter la récursion sur ces entrées ?
+
+## Garder une trace
+
+En cinq lignes : un arbre prédit avant le calcul, un souci rencontré, votre cas limite et le temps passé par exercice. Si vous vous êtes arrêté, dites à quelle étape. Rien d'autre n'est à finir pour rendre ce devoir.
+
+Pour toute question, vous pouvez me contacter par email : aurelien.noce@minesparis.psl.eu.
+
+<!-- livebook:{"break_markdown":true} -->
+
+Les cas limites vérifient que -(-3) ça fait bien 3 et que -0 ça fait bien 0.
+J'ai encore eu du mal a comprendre comment fonctionne case mais au final je pense avoir compris maintenant. 
+J'ai passé 5 min sur la première question, environ 10 min sur la deuxième parce que je bloquai sur quoi mettre entre {} ou non, et 15 min sur la dernière parce que je suis allé relire le cours sur case.
