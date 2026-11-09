@@ -1,0 +1,378 @@
+# Devoir 2 · Les départements de France
+
+## Notre question
+
+Paris compte près de 20 000 habitants au km², la Lozère moins de 15. Avec
+les 34 969 communes d'AP3, vous construisez une table par département,
+cherchez les plus denses et les plus vides, puis dessinez la population des
+régions.
+
+> **Repères.** Durée visée : 30 à 45 min, trois parties et trois petites
+> fonctions, chacune avec ses doctests. Les formes sont celles des carnets 1
+> à 3 : `group_by` et `summarise`, `mutate`, `join`, `sort_by`, `filter`, et
+> un graphique en barres. Les parties 2 et 3 reprennent la table de la
+> partie 1. Répondez aux questions de lecture (1.c, 2.c) d'un chiffre et
+> d'une phrase, dans une cellule de texte sous la question. Relisez le
+> chapitre 3 du poly, « De pandas à Explorer », hors Bonus. Si vous dépassez
+> nettement, arrêtez-vous à la fin d'une partie et indiquez le temps passé.
+> 
+> **À rendre.** Enregistrez ce carnet sous `AP3/devoir-2-departements.livemd`
+> dans votre dépôt `ap-homework`, puis commitez et poussez-le pour CYCLE1,
+> le **dimanche 15 novembre 2026 à 23 h 59**. Les carnets de séance ne se
+> rendent pas. Travail individuel, ou en binôme seulement si je l'annonce :
+> copie commune dans les deux dépôts et `BINOME.md`, où chacun explique sa
+> contribution et un essai compris.
+
+```elixir
+Mix.install([
+  {:explorer, "0.13.0"},
+  {:kino_explorer, "0.1.25"},
+  {:kino_vega_lite, "0.1.13"}
+], config: [
+  elixir: [
+    dbg_callback: {Kino.Debug, :dbg, [{Macro, :dbg, []}]}
+  ]
+])
+```
+
+La première installation demande une connexion. Les fichiers sont décrits
+dans [PROVENANCE.md](https://ap-2026.noce.fr/donnees/PROVENANCE.md).
+
+```elixir
+require Explorer.DataFrame, as: DF
+alias Explorer.Series
+alias VegaLite, as: Vl
+import ExUnit.Assertions
+
+# Pour travailler hors ligne, remplacez l'adresse par le chemin du dossier
+# où vous avez téléchargé les fichiers.
+donnees = System.get_env("AP_DONNEES") || "https://ap-2026.noce.fr/donnees"
+```
+
+Les communes se lisent comme au carnet 1 ; la table `regions` est celle du
+carnet 2.
+
+```elixir
+communes =
+  DF.from_csv!(donnees <> "/communes.csv",
+    dtypes: [code: :string, departement: :string, region: :string, code_postal: :string])
+
+# Les 18 régions, d'après l'API Géo (geo.api.gouv.fr/regions, Licence Ouverte).
+regions = DF.new(
+  region: ~w(11 24 27 28 32 44 52 53 75 76 84 93 94 01 02 03 04 06),
+  nom_region: ["Île-de-France", "Centre-Val de Loire", "Bourgogne-Franche-Comté",
+    "Normandie", "Hauts-de-France", "Grand Est", "Pays de la Loire", "Bretagne",
+    "Nouvelle-Aquitaine", "Occitanie", "Auvergne-Rhône-Alpes",
+    "Provence-Alpes-Côte d'Azur", "Corse", "Guadeloupe", "Martinique", "Guyane",
+    "La Réunion", "Mayotte"]
+)
+
+assert DF.n_rows(communes) == 34_969, "les 34 969 communes d'AP3"
+assert DF.n_rows(regions) == 18, "13 régions de métropole, 5 d'outre-mer"
+```
+
+```elixir
+communes
+```
+
+```elixir
+regions
+```
+
+## 1 · Une ligne par département
+
+**1.a** Écrivez `Departements.table(communes, regions)` : une ligne par
+département, triée par `departement`, avec le nombre de `communes`, la
+`population` et la `surface_ha` (des sommes), la `densite` en habitants par
+km² au dixième (un km² vaut 100 ha), et le `nom_region`. Les six étapes sont
+données dans la cellule.
+
+> 💡 En pandas, c'était `df.groupby(["departement", "region"])["population"].sum()`
+> puis `reset_index()` ; ici `DF.group_by` puis `DF.summarise` rendent
+> directement des colonnes, car Explorer n'a pas d'index.
+
+> 💡 En pandas, c'était `a.merge(b, on="region", how="left")` ; ici
+> `DF.join(a, b, on: "region", how: :left)`. Sans `how`, la jointure est
+> interne, et les départements sans région disparaîtraient.
+
+![Trois tables : les communes, une ligne chacune ; group_by, summarise et mutate en font une ligne par département, avec son nombre de communes, sa population et sa densité ; join avec how: :left y ajoute le nom de la région, nil pour le 984, absent de la table des régions](https://ap-2026.noce.fr/diagrams/devoir2/departements-jointure.svg)
+
+```elixir
+defmodule Departements do
+  @doc """
+  Une ligne par département : nombre de communes, population, surface,
+  densité, et le nom de la région quand `regions` la connaît.
+
+      iex> require Explorer.DataFrame, as: DF
+      iex> regions = DF.new(region: ["53"], nom_region: ["Bretagne"])
+      iex> communes = DF.new(code: ["a", "b", "c"], departement: ["29", "29", "975"],
+      ...>   region: ["53", "53", "975"], population: [300, 200, 25],
+      ...>   surface_ha: [150.0, 250.0, 1_000.0])
+      iex> Departements.table(communes, regions)
+      ...> |> DF.select(["departement", "communes", "population", "densite", "nom_region"])
+      ...> |> DF.to_rows(atom_keys: true)
+      [%{departement: "29", communes: 2, population: 500, densite: 125.0, nom_region: "Bretagne"},
+       %{departement: "975", communes: 1, population: 25, densite: 2.5, nom_region: nil}]
+
+  Ajoutez un doctest, un cas limite tiré des données : trois communes corses,
+  de `2A` et de `2B`, dans le désordre. Ces codes ne sont pas des nombres :
+  forment-ils bien deux lignes, dans l'ordre ?
+
+  """
+  def table(communes, regions) do
+    # Complétez chaque étape, puis retirez les # et les deux dernières lignes.
+    communes
+    |> DF.group_by(["departement", "region"])
+    |> DF.summarise(communes: count(code), population: sum(population), surface_ha: sum(surface_ha))
+    |> DF.mutate(densite: round(population / (surface_ha * 0.01), 1))    # habitants par km², round(…, 1)
+    |> DF.join(regions, on: "region", how: :left)               # how: :left
+    |> DF.sort_by(asc: departement)
+  end
+end
+```
+
+**1.b** Les vérifications vont de la forme de la table à ses valeurs.
+
+```elixir
+departements = Departements.table(communes, regions)
+assert DF.n_rows(departements) == 109, "101 départements et 8 collectivités d'outre-mer"
+assert DF.names(departements) ==
+         ["departement", "region", "communes", "population", "surface_ha", "densite", "nom_region"],
+       "sept colonnes, dans cet ordre"
+assert departements |> DF.head(1) |> DF.select(["departement", "communes", "population", "densite"])
+       |> DF.to_rows(atom_keys: true) ==
+         [%{departement: "01", communes: 391, population: 679_344, densite: 117.5}],
+       "l'Ain ouvre la table"
+departements
+```
+
+```elixir
+assert departements |> DF.filter(departement == "75")
+       |> DF.select(["communes", "densite", "nom_region"]) |> DF.to_rows(atom_keys: true) ==
+         [%{communes: 1, densite: 19967.5, nom_region: "Île-de-France"}],
+       "Paris, une seule commune, près de 20 000 habitants au km²"
+assert Series.sum(departements["population"]) == Series.sum(communes["population"]),
+       "aucun habitant perdu : les départements font la somme des communes"
+```
+
+**1.c** La jointure à gauche a gardé des lignes sans nom de région. Combien
+de communes regroupent-elles, et combien d'habitants ?
+
+```elixir
+sans_region = DF.filter(departements, is_nil(nom_region))
+
+{Series.sum(sans_region["communes"]), Series.sum(sans_region["population"])}
+```
+
+Il y en a 8, avec 94 communes concernées, et 602143 habitants
+
+<!-- livebook:{"break_markdown":true} -->
+
+Cherchez aussi votre département : remplacez `"29"` par son code.
+
+```elixir
+mon_departement = "33"
+DF.filter(departements, departement == ^mon_departement)
+```
+
+> 💡 Une faute de frappe, `populaton` ? Explorer propose `"population"` au
+> bas de son message d'erreur : lisez-le jusqu'au bout.
+
+## 2 · Les plus denses, les plus vides
+
+**2.a 🧩 Casse-tête · Une commune sans population.** Un département fictif
+compte deux communes de 100 ha ; l'une a 100 habitants, l'autre une
+population inconnue. Quelle densité lui donne votre `Departements.table` :
+`nil`, `100.0` ou `50.0` ? Et les Terres australes (`984`), dont aucune
+commune n'a de population connue ? Répondez dans « Garder une trace » avant
+d'exécuter, puis comparez.
+
+```elixir
+mini = DF.new(code: ["X1", "X2"], departement: ["99", "99"], region: ["11", "11"],
+         population: [100, nil], surface_ha: [100.0, 100.0])
+densite_mini = Departements.table(mini, regions) |> DF.pull("densite") |> Series.first()
+densite_984 = departements |> DF.filter(departement == "984") |> DF.pull("densite") |> Series.first()
+{densite_mini, densite_984}
+```
+
+**2.b** Sur le modèle de `plus_denses/2`, fournie, écrivez
+`Classement.moins_denses(departements, n)` : les codes des `n` départements
+les moins denses, du moins dense au plus dense, sans ceux dont la population
+vaut 0, car leur densité ne mesure rien.
+
+> 💡 En pandas, c'était `df.sort_values(by="densite", ascending=True)` ; ici
+> `DF.sort_by(df, asc: densite)`. Une densité `nil` irait en dernier dans les
+> deux sens ; le 0.0 du `984`, lui, sortirait le premier.
+
+```elixir
+defmodule Classement do
+  @doc """
+  Les codes des `n` départements les plus denses, du plus dense au moins dense.
+
+      iex> require Explorer.DataFrame, as: DF
+      iex> mini = DF.new(departement: ["01", "75", "984"], population: [10, 30, 0],
+      ...>   densite: [1.5, 20.0, 0.0])
+      iex> Classement.plus_denses(mini, 2)
+      ["75", "01"]
+  """
+  def plus_denses(departements, n) do
+    departements
+    |> DF.sort_by(desc: densite)
+    |> DF.head(n)
+    |> DF.pull("departement")
+    |> Series.to_list()
+  end
+
+  @doc """
+  Les codes des `n` départements les moins denses, du moins dense au plus
+  dense, sans ceux dont la population vaut 0.
+
+      iex> require Explorer.DataFrame, as: DF
+      iex> mini = DF.new(departement: ["01", "75", "984"], population: [10, 30, 0],
+      ...>   densite: [1.5, 20.0, 0.0])
+      iex> Classement.moins_denses(mini, 1)
+      ["01"]
+
+  Ajoutez un doctest, un cas limite : demandez plus de départements que la
+  table n'en compte, comme le fait la cellule suivante sur les vraies données.
+
+  """
+  def moins_denses(departements, n) do
+    departements
+    |> DF.filter(population > 0)
+    |> DF.sort_by(asc: densite)
+    |> DF.head(n)
+    |> DF.pull("departement")
+    |> Series.to_list()
+  end
+end
+```
+
+```elixir
+assert Classement.plus_denses(departements, 3) == ["75", "92", "93"],
+       "Paris, puis les Hauts-de-Seine et la Seine-Saint-Denis"
+assert Classement.moins_denses(departements, 3) == ["973", "988", "48"],
+       "la Guyane, la Nouvelle-Calédonie, puis la Lozère"
+length(Classement.moins_denses(departements, 200))
+```
+
+**2.c** On en demande 200 : combien en reçoit-on, et pourquoi pas 109 ?
+
+<!-- livebook:{"break_markdown":true} -->
+
+Il n'y a pas 109 lignes mais uniquement 107 avec une densité non nulle.
+
+## 3 · La population des régions, en barres
+
+**3.a** Écrivez `ParRegion.population(departements)` : la population des 18
+régions, de la plus peuplée à la moins peuplée, sans les lignes de 1.c qui
+n'ont pas de région.
+
+```elixir
+defmodule ParRegion do
+  @doc """
+  La population de chaque région, de la plus peuplée à la moins peuplée.
+
+      iex> require Explorer.DataFrame, as: DF
+      iex> deps = DF.new(nom_region: ["Bretagne", "Corse", "Bretagne"], population: [10, 40, 20])
+      iex> ParRegion.population(deps) |> DF.to_rows(atom_keys: true)
+      [%{nom_region: "Corse", population: 40}, %{nom_region: "Bretagne", population: 30}]
+
+  Ajoutez un doctest, un cas limite tiré des données : un département sans
+  région et très peuplé, comme la Polynésie (`987`).
+
+  """
+  def population(departements) do
+    departements
+    |> DF.drop_nil(["nom_region"])
+    |> DF.group_by("nom_region")
+    |> DF.summarise(population: sum(population))
+    |> DF.sort_by(desc: population)
+  end
+end
+```
+
+```elixir
+regions_pop = ParRegion.population(departements)
+assert DF.n_rows(regions_pop) == 18, "les 18 régions, sans les collectivités"
+assert regions_pop |> DF.head(1) |> DF.to_rows(atom_keys: true) ==
+         [%{nom_region: "Île-de-France", population: 12_463_067}],
+       "l'Île-de-France en tête"
+assert Series.sum(regions_pop["population"]) + 602_143 == Series.sum(departements["population"]),
+       "les régions et les collectivités de 1.c font la France entière"
+```
+
+**3.b** Le graphique est écrit : exécutez la cellule, puis regardez l'ordre
+des régions. Ajoutez `sort: "-x"` à l'axe `y` pour les ranger de la plus
+peuplée à la moins peuplée.
+
+> 💡 En pandas, `df.plot.barh()` gardait l'ordre de la table ; VegaLite range
+> un axe `:nominal` par ordre alphabétique, sauf avec `sort: "-x"`
+> (décroissant selon `x`).
+
+```elixir
+graphique =
+  Vl.new(width: 480, height: 400, title: "Population des régions")
+  |> Vl.data_from_values(regions_pop)
+  |> Vl.mark(:bar)
+  |> Vl.encode_field(:x, "population", type: :quantitative)
+  |> Vl.encode_field(:y, "nom_region", type: :nominal, title: "région", sort: "-x")
+
+graphique
+```
+
+```elixir
+axe_y = Vl.to_spec(graphique)["encoding"]["y"]
+assert axe_y["field"] == "nom_region", "une barre par région"
+assert axe_y["sort"] == "-x", "de la plus longue à la plus courte"
+```
+
+Votre phrase sur ce graphique va dans la trace : que montre-t-il, et que ne
+permet-il pas de conclure ?
+
+## Bonus théorique · facultatif, sur papier
+
+**La droite des moindres carrés.** Les moyennes annuelles du CO₂ à Mauna Loa,
+calculées au carnet 3, valent 316,9 ppm en 1960, 354,5 ppm en 1990 et
+414,2 ppm en 2020. Quelle droite passe "au plus près" de ces trois points ?
+Rédigez à la main et remettez au début d'AP4, séparément du carnet :
+
+1. Pour $n$ points $(x_i, y_i)$, on cherche la droite $y = a x + b$ qui rend
+   la plus petite possible la somme des carrés des écarts verticaux,
+   $S(a, b) = \sum_{i=1}^{n} (y_i - a x_i - b)^2$. Que mesure chaque terme ?
+   Calculez $\partial S / \partial a$ et $\partial S / \partial b$, annulez-les, et
+   déduisez-en $b = \bar{y} - a \bar{x}$ puis
+   $a = \sum_i (x_i - \bar{x})(y_i - \bar{y}) / \sum_i (x_i - \bar{x})^2$, où $\bar{x}$
+   et $\bar{y}$ sont les moyennes des $x_i$ et des $y_i$.
+2. Appliquez ces formules à la main aux trois points ci-dessus, en centrant
+   les abscisses : $u_i = x_i - 1990$. Que vaut $\sum_i u_i$, et pourquoi le
+   calcul s'en trouve-t-il allégé ? Donnez $a$, $b$ et l'équation de la droite.
+3. Interprétez $a$ en ppm par an et comparez-le aux hausses annuelles moyennes
+   par décennie du carnet 3 : 0,86 ppm par an dans les années 1960, 2,40 dans
+   les années 2010. Calculez les trois écarts $y_i - (a x_i + b)$ : que la
+   droite ne capture-t-elle pas ?
+
+Durée indicative : un peu moins d'une heure, en plus du devoir. Un
+raisonnement expliqué suffit ; aucun LaTeX n'est demandé. Ce bonus peut
+ajouter jusqu'à deux points à CYCLE1, sans dépasser 20.
+
+## Garder une trace
+
+En cinq lignes : votre réponse au casse-tête, écrite avant d'exécuter,
+comparée au résultat ; un souci rencontré ; ce que vos doctests ajoutés vous
+ont appris ; une phrase sur le graphique ; le temps passé par partie. Si vous
+vous êtes arrêté, dites à quelle partie. Rien d'autre n'est à finir pour
+rendre ce devoir.
+
+Données : communes et régions de l'[API Découpage administratif](https://geo.api.gouv.fr/decoupage-administratif)
+(INSEE, La Poste), sous Licence Ouverte d'Etalab ; le détail est dans
+[PROVENANCE.md](https://ap-2026.noce.fr/donnees/PROVENANCE.md).
+
+Pour toute question, vous pouvez me contacter par email : aurelien.noce@minesparis.psl.eu.
+
+<!-- livebook:{"break_markdown":true} -->
+
+Q 2.A : Je pense que ca renvoie 50 puis nil. Je pense qu'il fait la somme des deux mais vu que y'a un nil ca fait 0 et pour l'autre y'a pas de somme donc nil.
+Au final c'est 50 et 0 donc c'est la population qu'il met a 0 si c'est inconnu.
+
+Pour le graphique, on voit l'ordre des departements les plus peuplés, mais il n'y a pas la densité.
